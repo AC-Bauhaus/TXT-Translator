@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TXT Translator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+
+<body>
+    <header>
+        <div class="brand">
+            <div class="logo">文</div>
+            TXT Translator
+        </div>
+
+        <div class="top-right">
+            <button
+                class="icon-btn"
+                id="openSidebar"
+                aria-label="Abrir palavras protegidas"
+                title="Palavras que não devem ser traduzidas"
+            >☷</button>
+        </div>
+    </header>
+
+    <main>
+        <section class="intro">
+            <div class="eyebrow">Tradução offline, do seu jeito</div>
+            <h1>Suas palavras. Outro idioma.</h1>
+            <p>
+                Envie um arquivo TXT, PDF ou DOCX, escolha o idioma e mantenha nomes,
+                códigos ou caracteres exatamente como no original.
+            </p>
+        </section>
+
+        <div class="settings">
+            <div class="field">
+                <label for="source">De</label>
+
+                <select id="source">
+                    <option value="auto">Detectar idioma</option>
+                    {% for code, name in source_languages.items() if code != 'auto' %}
+                    <option value="{{ code }}">{{ name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div aria-hidden="true" style="color:#9299aa">→</div>
+
+            <div class="field">
+                <label for="target">Para</label>
+
+                <select id="target">
+                    {% for code, name in languages.items() %}
+                    <option value="{{ code }}" {% if code == 'pt' %}selected{% endif %}>{{ name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <section class="workspace">
+            <div class="pane">
+                <div class="pane-head">
+                    <div class="pane-title">
+                        <span class="dot"></span>
+                        Arquivo original
+                    </div>
+
+                    <span class="small" id="originalCount">Nenhum arquivo</span>
+                </div>
+
+                <div class="pane-body">
+                    <label class="upload" id="dropArea" for="fileInput">
+                        <div class="upload-icon">↑</div>
+                        <strong>Arraste seu arquivo para cá</strong>
+                        <span>ou clique para procurar no dispositivo</span>
+                        <span style="margin-top:12px">Arquivos .TXT, .PDF ou .DOCX · até 10 MB</span>
+                    </label>
+
+                    <input
+                        type="file"
+                        id="fileInput"
+                        accept=".txt,.pdf,.docx"
+                        hidden
+                    >
+
+                    <div class="file-meta" id="fileMeta">
+                        <div class="file-icon" id="fileIcon">TXT</div>
+
+                        <div class="file-details">
+                            <div class="file-name" id="fileName"></div>
+                            <div class="file-size" id="fileSize"></div>
+                        </div>
+
+                        <button class="remove" id="removeFile" title="Remover arquivo">×</button>
+                    </div>
+
+                    <button class="translate-btn" id="translateBtn" disabled>
+                        Traduzir arquivo <span>→</span>
+                    </button>
+
+                    <button class="translate-btn" id="selectFileButton">
+                       Selecionar tipo do arquivo
+                    </button>
+
+                    <p class="empty">Formatos aceitos: .TXT, .PDF e .DOCX</p>
+
+                    <div class="notice" id="notice"></div>
+                </div>
+            </div>
+
+            <div class="middle">
+                <div class="arrow" id="arrow">→</div>
+
+                <div class="progress" id="progress">
+                    <span id="progressFill"></span>
+                </div>
+
+                <div class="middle-label" id="progressLabel">
+                    PRONTO PARA<br>TRADUZIR
+                </div>
+            </div>
+
+            <div class="pane">
+                <div class="pane-head">
+                    <div class="pane-title">
+                        <span class="dot green"></span>
+                        Resultado traduzido
+                    </div>
+
+                    <span class="small" id="translatedCount">Prévia</span>
+                </div>
+
+                <div class="pane-body">
+                    <div class="preview empty" id="preview">
+Seu texto traduzido aparecerá aqui.<br>
+Faça o upload de um arquivo e clique em traduzir.
+                    </div>
+
+                    <button class="download" id="downloadBtn">
+                        ↓ &nbsp; Baixar arquivo traduzido
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <div class="footer-note">
+            Tradução local e privada: depois de instalar os modelos de idioma,
+            funciona sem internet e sem enviar seus textos a terceiros.
+        </div>
+    </main>
+
+    <div class="scrim" id="scrim"></div>
+
+    <aside class="sidebar" id="sidebar">
+        <div class="side-head">
+            <h2>Preferências de tradução</h2>
+
+            <button class="close" id="closeSidebar" aria-label="Fechar">×</button>
+        </div>
+
+        <div class="side-section" style="border-top:0;padding-top:0;margin-top:0">
+            <h3>Palavras protegidas</h3>
+
+            <p class="side-desc">
+                Insira palavras a serem ignoradas na Tradução
+            </p>
+
+            <textarea id="protectedTerms" placeholder="Exemplo:
+Pokémon
+[VAR NAME]
+\n
+ZXQ_123">
+            </textarea>
+
+            <div class="side-actions" style="margin-top:22px">
+                <button class="save" id="saveTerms">
+                    Salvar palavras protegidas
+                </button>
+
+                <div class="saved-note" id="savedNote"></div>
+            </div>
+        </div>
+
+        <div class="side-section">
+            <h3>Dicionário personalizado</h3>
+
+            <p class="side-desc">
+                Defina a tradução exata de palavras ou expressões.
+                A regra substitui todas as ocorrências como palavra completa,
+                antes da tradução automática.
+            </p>
+
+            <div class="glossary-form">
+                <input
+                    id="glossarySource"
+                    placeholder="Palavra original (ex.: Word)"
+                    aria-label="Palavra original"
+                >
+
+                <input
+                    id="glossaryTranslation"
+                    placeholder="Tradução desejada (ex.: Palavra)"
+                    aria-label="Tradução desejada"
+                >
+
+                <button id="addGlossary">
+                    + Adicionar regra usando os idiomas selecionados
+                </button>
+            </div>
+
+            <div class="hint">
+                A regra fica vinculada aos idiomas selecionados acima.
+                Se a origem estiver em “Detectar idioma”, ela valerá
+                para qualquer origem e o destino escolhido.
+            </div>
+
+            <div class="glossary-list" id="glossaryList">
+                <div class="empty-glossary">Carregando regras…</div>
+            </div>
+        </div>
+
+        <div class="side-section">
+            <h3>Biblioteca de modelos offline</h3>
+
+            <p class="side-desc">
+                Baixe o modelo do par selecionado. A internet é necessária
+                apenas para o download inicial; depois, o modelo fica no computador.
+            </p>
+
+            <button class="save" id="downloadModel" type="button">
+                Baixar modelo dos idiomas selecionados
+            </button>
+
+            <div class="saved-note" id="modelNote" aria-live="polite"></div>
+        </div>
+    </aside>
+    <script>
+        window.sourceLanguages = {{ source_languages|tojson }};
+    </script>
+    <script src="{{ url_for('static', filename='scripts.js') }}"></script>
+</body>
+</html>
