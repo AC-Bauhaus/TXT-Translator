@@ -1,5 +1,7 @@
 import json
 import os
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 import re
 import sys
 import uuid
@@ -54,6 +56,38 @@ def save_settings(data):
 
 
 app = Flask(__name__, template_folder=resource_path("templates"))
+
+_ALIGNER = None
+_ALIGNER_INITIALIZED = False
+
+def get_simalign_aligner():
+    """Carrega o alinhador uma única vez, usando somente modelos locais."""
+    global _ALIGNER, _ALIGNER_INITIALIZED
+
+    if _ALIGNER_INITIALIZED:
+        return _ALIGNER
+
+    _ALIGNER_INITIALIZED = True
+
+    try:
+        from simalign import SentenceAligner
+
+        _ALIGNER = SentenceAligner(
+            model="bert",
+            token_type="bpe",
+            matching_methods="mai",
+        )
+
+    except Exception as exc:
+        app.logger.warning(
+            "SimAlign indisponível offline; usando alinhamento "
+            "aproximado para DOCX. Motivo: %s",
+            exc,
+        )
+        _ALIGNER = None
+
+    return _ALIGNER
+
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 
 # Languages offered by the Argos Translate model catalog. A language appearing here
@@ -418,7 +452,9 @@ def translate_docx(data, source, target, terms, glossary):
                         return True
 
                     return False
-                
+
+                aligner = get_simalign_aligner()
+
                 paragraphs = root.xpath(".//w:p", namespaces=ns)
 
                 for paragraph in paragraphs:
@@ -428,7 +464,6 @@ def translate_docx(data, source, target, terms, glossary):
                     ):
                         continue
 
-                    # Reúne nós de texto e identifica o estilo de cada um.
                     text_nodes = paragraph.xpath(
                         ".//w:t",
                         namespaces=ns,
@@ -456,121 +491,171 @@ def translate_docx(data, source, target, terms, glossary):
                     if not translated:
                         continue
 
-                    # Mapeia os limites dos nós originais na frase completa.
-                    import difflib
+                    # Tokens com posições no texto original e traduzido.
+                    token_pattern = re.compile(
+                        r"\w+(?:['’]\w+)*|[^\w\s]",
+                        re.UNICODE,
+                    )
 
-                    token_pattern = re.compile(r"\s+|[^\W\s]+|[^\w\s]", re.UNICODE)
+                    source_matches = list(token_pattern.finditer(core))
+                    target_matches = list(token_pattern.finditer(translated))
 
-                    original_tokens = []
-                    token_nodes = []
-                    offset = 0
-
-                    for index, part in enumerate(original_parts):
-                        for match in token_pattern.finditer(part):
-                            original_tokens.append(match.group())
-                            token_nodes.append(index)
-                        offset += len(part)
-
-                    translated_tokens = token_pattern.findall(translated)
-
-                    if not original_tokens or not translated_tokens:
+                    if not source_matches or not target_matches:
                         text_nodes[0].text = leading + translated + trailing
                         for node in text_nodes[1:]:
                             node.text = ""
                         continue
 
-                    # Alinha tokens iguais entre original e tradução.
-                    # Os tokens não alinhados são distribuídos entre os
-                    # limites dos tokens correspondentes mais próximos.
-                    matcher = difflib.SequenceMatcher(
-                        None,
-                        [
-                            token.casefold()
-                            for token in original_tokens
-                        ],
-                        [
-                            token.casefold()
-                            for token in translated_tokens
-                        ],
-                        autojunk=False,
+                    source_words = [
+                        match.group() for match in source_matches
+                    ]
+                    target_words = [
+                        match.group() for match in target_matches
+                    ]
+
+                    # Descobre a qual nó original pertence cada palavra.
+                    node_ends = []
+                    position = 0
+
+                    for part in original_parts:
+                        position += len(part)
+                        node_ends.append(position)
+
+                    source_word_nodes = []
+
+                    for match in source_matches:
+                        absolute_position = (
+                            len(leading) + match.start()
+                        )
+
+                        node_index = next(
+                            (
+                                i for i, end in enumerate(node_ends)
+                                if absolute_position < end
+                            ),
+                            len(text_nodes) - 1,
+                        )
+
+                        source_word_nodes.append(node_index)
+
+                    # Alinhamento linguístico entre os dois idiomas.
+                    # Tenta o alinhamento linguístico local.
+                    alignment = set()
+
+                    if aligner is not None:
+                        try:
+                            alignment_result = aligner.get_word_aligns(
+                                source_words,
+                                target_words,
+                            )
+                            alignment = alignment_result.get(
+                                "itermax",
+                                alignment_result.get("inter", set()),
+                            )
+
+                        except Exception as exc:
+                            app.logger.warning(
+                                "Falha no alinhamento SimAlign; usando alternativa: %s",
+                                exc,
+                            )
+
+                    pairs = sorted(
+                        (int(src_i), int(trg_i))
+                        for src_i, trg_i in alignment
                     )
 
-                    original_boundaries = [0] * (
-                        len(original_tokens) + 1
-                    )
+                    # Alternativa local: distribui os índices proporcionalmente.
+                    # É menos precisa, mas permite continuar sem o modelo SimAlign.
+                    if not pairs:
+                        source_count = len(source_matches)
+                        target_count = len(target_matches)
 
-                    for i, node_index in enumerate(token_nodes):
-                        original_boundaries[i] = node_index
+                        if source_count and target_count:
+                            for src_i in range(source_count):
+                                if target_count == 1 or source_count == 1:
+                                    trg_i = 0
+                                else:
+                                    trg_i = round(
+                                        src_i * (target_count - 1) / (source_count - 1)
+                                    )
 
-                    original_boundaries[len(original_tokens)] = (
-                        len(text_nodes) - 1
-                    )
+                                pairs.append((src_i, trg_i))
 
-                    assignments = [[] for _ in text_nodes]
+                    # Calcula um corte de destino para cada limite de estilo.
+                    cuts = [0]
+                    previous_cut = 0
 
-                    # Constrói posições de corte usando os nós de origem.
-                    cuts = [0] * (len(text_nodes) + 1)
-                    for i, node_index in enumerate(token_nodes):
-                        cuts[node_index + 1] = i + 1
-
-                    for i in range(1, len(cuts)):
-                        if cuts[i] == 0:
-                            cuts[i] = cuts[i - 1]
-
-                    cuts[-1] = len(original_tokens)
-
-                    token_to_node = {}
-                    for node_index in range(len(text_nodes)):
-                        for token_index in range(
-                            cuts[node_index], cuts[node_index + 1]
-                        ):
-                            token_to_node[token_index] = node_index
-
-                    # Usa correspondências exatas como âncoras.
-                    anchors = []
-                    for block in matcher.get_matching_blocks():
-                        for delta in range(block.size):
-                            oi = block.a + delta
-                            ti = block.b + delta
-                            anchors.append((ti, token_to_node.get(oi, 0)))
-
-                    anchors.sort()
-
-                    # Distribui sequências traduzidas entre as âncoras.
-                    for ti, token in enumerate(translated_tokens):
-                        previous = [
-                            node_index
-                            for anchor_t, node_index in anchors
-                            if anchor_t <= ti
+                    for node_index in range(1, len(text_nodes)):
+                        left_targets = [
+                            trg_i
+                            for src_i, trg_i in pairs
+                            if source_word_nodes[src_i] < node_index
                         ]
-                        following = [
-                            node_index
-                            for anchor_t, node_index in anchors
-                            if anchor_t >= ti
+
+                        right_targets = [
+                            trg_i
+                            for src_i, trg_i in pairs
+                            if source_word_nodes[src_i] >= node_index
                         ]
 
-                        if previous:
-                            node_index = previous[-1]
-                        elif following:
-                            node_index = following[0]
+                        if left_targets and right_targets:
+                            left_edge = max(left_targets) + 1
+                            right_edge = min(right_targets)
+
+                            # Se houver mudança de ordem, evita corte negativo.
+                            if right_edge < left_edge:
+                                cut = right_edge
+                            else:
+                                cut = round(
+                                    (left_edge + right_edge) / 2
+                                )
+                        elif left_targets:
+                            cut = max(left_targets) + 1
+                        elif right_targets:
+                            cut = min(right_targets)
                         else:
-                            node_index = 0
+                            cut = previous_cut
 
-                        assignments[node_index].append(token)
+                        cut = max(
+                            previous_cut,
+                            min(cut, len(target_matches)),
+                        )
 
-                    # Recompõe os nós existentes sem remover suas tags.
-                    for index, node in enumerate(text_nodes):
-                        piece = "".join(assignments[index])
+                        cuts.append(cut)
+                        previous_cut = cut
 
-                        if index == 0:
+                    cuts.append(len(target_matches))
+
+                    # Converte os cortes em texto sem perder pontuação
+                    # nem espaços entre palavras.
+                    for i, node in enumerate(text_nodes):
+                        start_index = cuts[i]
+                        end_index = cuts[i + 1]
+
+                        if start_index >= end_index:
+                            piece = ""
+                        else:
+                            start_char = target_matches[start_index].start()
+                            end_char = (
+                                target_matches[end_index].start()
+                                if end_index < len(target_matches)
+                                else len(translated)
+                            )
+
+                            piece = translated[start_char:end_char]
+
+                        if i == 0:
                             piece = leading + piece
 
-                        if index == len(text_nodes) - 1:
+                        if i == len(text_nodes) - 1:
                             piece += trailing
 
                         node.text = piece
 
-                        if piece.startswith(" ") or piece.endswith(" "):
+                        if (
+                            piece.startswith(" ")
+                            or piece.endswith(" ")
+                        ):
                             node.set(
                                 f"{{{XML_NS}}}space", "preserve"
                             )
@@ -700,8 +785,8 @@ def translate():
     filename = file.filename or ""
     extension = Path(filename).suffix.lower()
 
-    if extension not in (".txt", ".pdf", ".docx"):
-        return jsonify(error="Formato não suportado. Use .TXT, .PDF ou .DOCX."), 400
+    if extension not in (".txt", ".pdf"):
+        return jsonify(error="Formato não suportado. Use .TXT ou .PDF."), 400
 
     try:
         data = file.read()
@@ -750,19 +835,10 @@ def translate():
                 translated_chars=len(output),
             )
 
-        if extension == ".docx":
-            output = translate_docx(
-                data, source, target, terms, glossary
-            )
-            mime_type = (
-                "application/vnd.openxmlformats-officedocument."
-                "wordprocessingml.document"
-            )
-        else:
-            output = translate_pdf(
-                data, source, target, terms, glossary
-            )
-            mime_type = "application/pdf"
+        output = translate_pdf(
+            data, source, target, terms, glossary
+        )
+        mime_type = "application/pdf"
 
         translated_filename = f"{Path(filename).stem}_{target}{extension}"
 
