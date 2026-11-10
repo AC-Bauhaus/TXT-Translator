@@ -351,7 +351,7 @@ select {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     min-height: 250px;
-    max-height: 430px;
+    max-height: 350px;
     overflow: auto;
     font: 13px/1.8 ui-monospace, SFMono-Regular, Consolas, monospace;
     color: #485365;
@@ -789,4 +789,172 @@ select {
 .file-icon-docx {
     background-color: #dbeafe;
     color: #2563eb;
+}
+
+.translation-mode-dropdown {
+    position: relative;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    margin-bottom: 12px;
+}
+
+.translation-mode-trigger {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--border-color, #d7dce3);
+    border-radius: 12px;
+    background: var(--card-background, #fff);
+    color: var(--text-color, #222);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+
+.translation-mode-trigger:hover,
+.translation-mode-dropdown.is-open .translation-mode-trigger {
+    border-color: var(--accent-color, #6478e8);
+    box-shadow: 0 0 0 3px rgba(100, 120, 232, 0.10);
+}
+
+.translation-mode-selected-text {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.translation-mode-selected-name {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.translation-mode-selected-description {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--muted-color, #737985);
+}
+
+.translation-mode-chevron {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    transition: transform 0.2s;
+}
+
+.translation-mode-dropdown.is-open .translation-mode-chevron {
+    transform: rotate(180deg);
+}
+
+.translation-mode-menu {
+    position: absolute;
+    z-index: 100;
+    top: calc(100% + 8px);
+    left: 0;
+    width: 100%;
+    padding: 6px;
+    border: 1px solid var(--border-color, #d7dce3);
+    border-radius: 14px;
+    background: var(--card-background, #fff);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
+}
+
+.translation-mode-menu[hidden] {
+    display: none;
+}
+
+.translation-mode-dropdown-option {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    width: 100%;
+    padding: 11px 10px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text-color, #222);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.translation-mode-dropdown-option:hover {
+    background: var(--hover-background, #f4f6fa);
+}
+
+.translation-mode-dropdown-option.active {
+    border-color: rgba(100, 120, 232, 0.25);
+    background: rgba(100, 120, 232, 0.08);
+}
+
+.translation-mode-dropdown-option .mode-icon,
+.translation-mode-trigger .mode-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: var(--icon-background, #f0f2f7);
+    color: var(--accent-color, #6478e8);
+}
+
+.translation-mode-dropdown-option .mode-icon svg,
+.translation-mode-trigger .mode-icon svg {
+    display: block;
+    width: 19px;
+    height: 19px;
+}
+
+.translation-mode-dropdown-option.active .mode-icon {
+    background: rgba(100, 120, 232, 0.13);
+}
+
+.translation-mode-dropdown-option .mode-text {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.translation-mode-dropdown-option .mode-name {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.translation-mode-dropdown-option .mode-description {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--muted-color, #737985);
+}
+
+.translation-mode-dropdown-option .mode-check {
+    visibility: hidden;
+    flex-shrink: 0;
+    color: var(--accent-color, #6478e8);
+    font-weight: 700;
+}
+
+.translation-mode-dropdown-option.active .mode-check {
+    visibility: visible;
+}
+
+@media (max-width: 480px) {
+    .translation-mode-dropdown {
+        max-width: 100%;
+    }
+
+    .translation-mode-trigger {
+        padding: 10px 12px;
+    }
+
+    .translation-mode-menu {
+        box-sizing: border-box;
+    }
 }

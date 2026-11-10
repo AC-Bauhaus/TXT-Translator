@@ -13,12 +13,11 @@ class DesktopAPI:
         import webview
 
         path = webview.windows[0].create_file_dialog(
-            webview.SAVE_DIALOG,
+            webview.FileDialog.SAVE,
             save_filename=Path(filename).name,
             file_types=(
                 "Arquivos TXT (*.txt)",
                 "Documentos PDF (*.pdf)",
-                "Documentos Word (*.docx)",
                 "Todos os arquivos (*.*)",
             ),
         )

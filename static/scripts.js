@@ -23,11 +23,11 @@ formatMenu.setAttribute("aria-label", "Escolha o formato do arquivo");
 const formats = [
     { label: "Arquivo TXT", extension: ".txt", accept: ".txt,text/plain" },
     { label: "Documento PDF", extension: ".pdf", accept: ".pdf,application/pdf" },
-    {
+    /*{
         label: "Documento Word (DOCX)",
         extension: ".docx",
         accept: ".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    }
+    }*/
 ];
 
 const formatIcons = {
@@ -44,12 +44,12 @@ const formatIcons = {
         <text x="12" y="16.5" font-size="5.5" font-weight="700" text-anchor="middle" fill="#dc2626">PDF</text>
     </svg>`,
 
-    docx: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    /*docx: `<svg viewBox="0 0 24 24" aria-hidden="true">
         <path fill="#2563eb" d="M6 2.5h8l5 5V21a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V4.5a2 2 0 0 1 2-2Z"/>
         <path fill="#93c5fd" d="M14 2.5v5h5Z"/>
         <path fill="#fff" d="M6.5 11h11v7h-11z"/>
         <path fill="#2563eb" d="m8 12.5 1 4 1.2-2.4 1.2 2.4 1-4h-1.2l-.5 2.2-.7-1.6-.7 1.6-.5-2.2Zm5.8 0h1.5a2 2 0 0 1 0 4h-1.5zm1.2 1v2h.3a1 1 0 0 0 0-2Z"/>
-    </svg>`
+    </svg>`*/
 };
 
 formats.forEach(format => {
@@ -227,9 +227,10 @@ $("translateBtn").addEventListener("click", async () => {
 
     btn.disabled = true;
     btn.textContent = "Traduzindo…";
+
     $("arrow").className = "arrow working";
     $("progress").style.display = "block";
-    $("progressFill").style.width = "25%";
+    $("progressFill").style.width = "1%";
     $("progressLabel").innerHTML = "TRADUZINDO…";
 
     showNotice("", "");
@@ -244,28 +245,90 @@ $("translateBtn").addEventListener("click", async () => {
         form.append("file", selectedFile);
         form.append("source", $("source").value);
         form.append("target", $("target").value);
+        form.append("mode", $("translationMode").value);
         form.append("protected", $("protectedTerms").value);
 
-        $("progressFill").style.width = "55%";
-
-        const response = await fetch("/translate", {
+        // Inicia a tarefa sem bloquear o navegador até a conclusão.
+        const startResponse = await fetch("/translate", {
             method: "POST",
             body: form
         });
 
-        if (runId !== translationRun) return;
+        const startData = await startResponse.json();
 
-        if (!response.ok) {
-            const errorData = await response.json();
+        if (!startResponse.ok) {
             throw new Error(
-                errorData.error || "Não foi possível traduzir o arquivo."
+                startData.error || "Não foi possível iniciar a tradução."
             );
         }
 
-        const extension = selectedFile.name.split(".").pop().toLowerCase();
+        const jobId = startData.job_id;
+
+        if (!jobId) {
+            throw new Error(
+                "O servidor não retornou o identificador da tradução."
+            );
+        }
+
+        // Consulta o progresso real até que a tarefa termine.
+        while (true) {
+            if (runId !== translationRun) return;
+
+            const statusResponse = await fetch(
+                `/translate/progress/${jobId}`
+            );
+
+            const statusData = await statusResponse.json();
+
+            if (!statusResponse.ok) {
+                throw new Error(
+                    statusData.error ||
+                    "Não foi possível consultar o progresso."
+                );
+            }
+
+            if (statusData.status === "error") {
+                throw new Error(
+                    statusData.error || "Falha durante a tradução."
+                );
+            }
+
+            const progress = Math.max(
+                1,
+                Math.min(99, Number(statusData.progress) || 1)
+            );
+
+            $("progressFill").style.width = `${progress}%`;
+
+            if (statusData.status === "completed") {
+                break;
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 250));
+        }
+
+        if (runId !== translationRun) return;
+
+        // Busca o resultado somente depois da conclusão.
+        const resultResponse = await fetch(
+            `/translate/result/${jobId}`
+        );
+
+        if (!resultResponse.ok) {
+            const errorData = await resultResponse.json();
+
+            throw new Error(
+                errorData.error || "Não foi possível obter o resultado."
+            );
+        }
+
+        const extension = selectedFile.name
+            .split(".")
+            .pop()
+            .toLowerCase();
 
         if (extension === "txt") {
-            const data = await response.json();
+            const data = await resultResponse.json();
 
             translatedText = data.translated;
             translatedFilename = data.filename;
@@ -274,24 +337,26 @@ $("translateBtn").addEventListener("click", async () => {
             $("preview").textContent = translatedText;
 
             $("translatedCount").textContent =
-            `${data.translated_chars.toLocaleString("pt-BR")} caracteres`;
+                `${data.translated_chars.toLocaleString("pt-BR")} caracteres`;
 
             $("downloadBtn").classList.add("enabled");
+
         } else {
-            const blob = await response.blob();
+            const blob = await resultResponse.blob();
 
             translatedText = "";
-            translatedFilename =
-            selectedFile.name.replace(/\.(pdf|docx)$/i, "") +
-            `_${$("target").value}.${extension}`;
 
-            // O arquivo binário fica pronto para download.
+            translatedFilename = selectedFile.name.replace(
+                /\.pdf$/i,
+                ""
+            ) + `_${$("target").value}.pdf`;
+
             translatedBlob = blob;
 
             $("preview").className = "preview empty";
             $("preview").textContent =
-            `Documento ${extension.toUpperCase()} traduzido. ` +
-            "Baixe o arquivo para visualizar o resultado.";
+                "Documento PDF traduzido. " +
+                "Baixe o arquivo para visualizar o resultado.";
 
             $("translatedCount").textContent = "Documento pronto";
             $("downloadBtn").classList.add("enabled");
@@ -299,6 +364,7 @@ $("translateBtn").addEventListener("click", async () => {
 
         $("arrow").className = "arrow done";
         $("arrow").textContent = "✓";
+
         $("progressFill").style.width = "100%";
         $("progressLabel").innerHTML = "TRADUÇÃO<br>CONCLUÍDA";
 
@@ -306,16 +372,21 @@ $("translateBtn").addEventListener("click", async () => {
             "Arquivo traduzido com sucesso! Você já pode baixar o resultado.",
             "success"
         );
+
     } catch (err) {
+        if (runId !== translationRun) return;
+
         $("arrow").className = "arrow";
         $("arrow").textContent = "→";
+
         $("progressLabel").innerHTML = "ERRO NA<br>TRADUÇÃO";
 
         showNotice(err.message, "error");
 
         $("preview").className = "preview empty";
         $("preview").textContent =
-            "A tradução não foi concluída. Confira a mensagem de erro e tente novamente."
+            "A tradução não foi concluída. Confira a mensagem de erro e tente novamente.";
+
     } finally {
         if (runId === translationRun) {
             btn.disabled = !selectedFile;
@@ -330,7 +401,6 @@ $("translateBtn").addEventListener("click", async () => {
         }
     }
 });
-
 
 $("downloadBtn").addEventListener("click", async () => {
     let blob;
@@ -637,3 +707,112 @@ $("saveTerms").addEventListener('click', async () => {
 });
 
 loadSettings();
+
+
+const translationMode = $("translationMode");
+const modeDropdown = $("translationModeDropdown");
+const modeTrigger = $("translationModeTrigger");
+const modeMenu = $("translationModeMenu");
+
+const selectedIcon = $("translationModeSelectedIcon");
+const selectedName = $("translationModeSelectedName");
+const selectedDescription = $("translationModeSelectedDescription");
+
+const modeOptions = document.querySelectorAll(
+    ".translation-mode-dropdown-option"
+);
+
+const modeDescriptions = {
+    fast: {
+        name: "Rápido",
+        description: "Mais velocidade menos precisão",
+        selectedDescription: "Prioriza a velocidade de processamento.",
+        icon: `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m13 2-3 8h8L8 22l3-9H4l9-11z"/>
+            </svg>
+        `
+    },
+    balanced: {
+        name: "Equilibrado",
+        description: "Equilibra velocidade e contexto.",
+        selectedDescription: "Equilibra velocidade e segmentação do texto.",
+        icon: `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3v18"/>
+                <path d="M3 7h18"/>
+                <path d="m7 7-4 7h8L7 7z"/>
+                <path d="m17 7-4 7h8l-4-7z"/>
+            </svg>
+        `
+    },
+    quality: {
+        name: "Melhor qualidade",
+        description: "Menos velocidade mais precisão",
+        selectedDescription: "Processa trechos menores para preservar melhor o contexto local.",
+        icon: `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-2-5.8L4 11l6-2.2L12 3z"/>
+                <path d="m19 14 1.2 2.8L23 18l-2.8 1.2L19 22l-1.2-2.8L15 18l2.8-1.2L19 14z"/>
+            </svg>
+        `
+    }
+};
+
+function closeTranslationModeMenu() {
+    modeMenu.hidden = true;
+    modeTrigger.setAttribute("aria-expanded", "false");
+    modeDropdown.classList.remove("is-open");
+}
+
+function selectTranslationMode(mode) {
+    const option = modeDescriptions[mode];
+
+    if (!option) return;
+
+    translationMode.value = mode;
+
+    selectedIcon.innerHTML = option.icon;
+    selectedName.textContent = option.name;
+    selectedDescription.textContent = option.description;
+
+    modeOptions.forEach(item => {
+        const selected = item.dataset.mode === mode;
+
+        item.classList.toggle("active", selected);
+        item.setAttribute("aria-selected", String(selected));
+    });
+
+    closeTranslationModeMenu();
+}
+
+modeTrigger.addEventListener("click", () => {
+    const willOpen = modeMenu.hidden;
+
+    modeMenu.hidden = !willOpen;
+    modeTrigger.setAttribute("aria-expanded", String(willOpen));
+    modeDropdown.classList.toggle("is-open", willOpen);
+});
+
+modeOptions.forEach(option => {
+    option.addEventListener("click", () => {
+        selectTranslationMode(option.dataset.mode);
+    });
+});
+
+document.addEventListener("click", event => {
+    if (!modeDropdown.contains(event.target)) {
+        closeTranslationModeMenu();
+    }
+});
+
+document.addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+        closeTranslationModeMenu();
+    }
+});
+
+selectTranslationMode(translationMode.value || "balanced");

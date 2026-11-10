@@ -29,7 +29,7 @@
             <div class="eyebrow">Tradução offline, do seu jeito</div>
             <h1>Suas palavras. Outro idioma.</h1>
             <p>
-                Envie um arquivo TXT, ou PDF, escolha o idioma e tenha uma
+                Envie um arquivo TXT ou PDF, escolha o idioma e tenha uma
                 tradução precisa e rápida.
             </p>
         </section>
@@ -57,6 +57,119 @@
                     {% endfor %}
                 </select>
             </div>
+        </div>
+
+        <div class="translation-mode">
+            <p class="translation-mode-title">Modo de tradução</p>
+
+            <div class="translation-mode-dropdown" id="translationModeDropdown">
+                <button
+                    type="button"
+                    class="translation-mode-trigger"
+                    id="translationModeTrigger"
+                    aria-expanded="false"
+                    aria-haspopup="listbox"
+                >
+                    <span class="mode-icon" id="translationModeSelectedIcon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M5 12h14"/>
+                            <path d="m12 5 7 7-7 7"/>
+                        </svg>
+                    </span>
+
+                    <span class="translation-mode-selected-text">
+                        <span class="translation-mode-selected-name"
+                            id="translationModeSelectedName">Equilibrado</span>
+                        <span class="translation-mode-selected-description"
+                            id="translationModeSelectedDescription">
+                            Equilibra velocidade e contexto.
+                        </span>
+                    </span>
+
+                    <svg class="translation-mode-chevron"
+                        viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="m6 9 6 6 6-6"/>
+                    </svg>
+                </button>
+
+                <div class="translation-mode-menu"
+                    id="translationModeMenu"
+                    role="listbox"
+                    aria-label="Escolher modo de tradução"
+                    hidden>
+
+                    <button type="button"
+                            class="translation-mode-dropdown-option"
+                            data-mode="fast"
+                            role="option"
+                            aria-selected="false">
+                        <span class="mode-icon">
+                            <svg viewBox="0 0 24 24" fill="none"
+                                stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <path d="m13 2-3 8h8L8 22l3-9H4l9-11z"/>
+                            </svg>
+                        </span>
+                        <span class="mode-text">
+                            <span class="mode-name">Rápido</span>
+                            <span class="mode-description">Mais velocidade menos precisão</span>
+                        </span>
+                        <span class="mode-check" aria-hidden="true">✓</span>
+                    </button>
+
+                    <button type="button"
+                            class="translation-mode-dropdown-option active"
+                            data-mode="balanced"
+                            role="option"
+                            aria-selected="true">
+                        <span class="mode-icon">
+                            <svg viewBox="0 0 24 24" fill="none"
+                                stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 3v18"/>
+                                <path d="M3 7h18"/>
+                                <path d="m7 7-4 7h8L7 7z"/>
+                                <path d="m17 7-4 7h8l-4-7z"/>
+                            </svg>
+                        </span>
+                        <span class="mode-text">
+                            <span class="mode-name">Equilibrado</span>
+                            <span class="mode-description">Equilibra velocidade e contexto.</span>
+                        </span>
+                        <span class="mode-check" aria-hidden="true">✓</span>
+                    </button>
+
+                    <button type="button"
+                            class="translation-mode-dropdown-option"
+                            data-mode="quality"
+                            role="option"
+                            aria-selected="false">
+                        <span class="mode-icon">
+                            <svg viewBox="0 0 24 24" fill="none"
+                                stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-2-5.8L4 11l6-2.2L12 3z"/>
+                                <path d="m19 14 1.2 2.8L23 18l-2.8 1.2L19 22l-1.2-2.8L15 18l2.8-1.2L19 14z"/>
+                            </svg>
+                        </span>
+                        <span class="mode-text">
+                            <span class="mode-name">Melhor qualidade</span>
+                            <span class="mode-description">Menos velocidade mais precisão</span>
+                        </span>
+                        <span class="mode-check" aria-hidden="true">✓</span>
+                    </button>
+
+                </div>
+            </div>
+
+            <select id="translationMode" hidden>
+                <option value="fast">Rápido</option>
+                <option value="balanced" selected>Equilibrado</option>
+                <option value="quality">Melhor qualidade</option>
+            </select>
         </div>
 
         <section class="workspace">
