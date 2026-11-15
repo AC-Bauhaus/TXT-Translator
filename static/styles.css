@@ -306,6 +306,12 @@ select {
     transition: .25s
 }
 
+.arrow span {
+    display: block;
+    line-height: 1;
+    transform: translateY(-2px);
+}
+
 .arrow.working {
     animation: pulse 1s infinite;
     background: var(--accent);
@@ -345,6 +351,23 @@ select {
     font-size: 10px;
     color: var(--muted);
     text-align: center
+}
+
+.progress-details {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+}
+
+.progress-time {
+    display: none;
+    color: var(--muted);
+    font-size: 8px;
+    line-height: 1.5;
+    text-align: center;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
 }
 
 .preview {
@@ -956,5 +979,115 @@ select {
 
     .translation-mode-menu {
         box-sizing: border-box;
+    }
+}
+
+/* ========================================
+   PAINEL DE TEMPO DA TRADUÇÃO
+======================================== */
+
+.translation-timer {
+    display: none;
+
+    width: min(100%, 380px);
+    margin: 18px auto 28px;
+    padding: 14px 20px;
+
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+
+    background: linear-gradient(
+        135deg,
+        #ffffff,
+        #f7f6ff
+    );
+
+    border: 1px solid #e5e3ff;
+    border-radius: 16px;
+
+    box-shadow:
+        0 5px 18px rgba(99, 91, 255, 0.07);
+
+    box-sizing: border-box;
+}
+
+/* Ícone do relógio */
+
+.translation-timer-icon {
+    width: 42px;
+    height: 42px;
+
+    flex-shrink: 0;
+
+    display: grid;
+    place-items: center;
+
+    background: #eeedff;
+    color: var(--accent);
+
+    border-radius: 13px;
+}
+
+.translation-timer-icon svg {
+    width: 22px;
+    height: 22px;
+}
+
+/* Conteúdo */
+
+.translation-timer-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+
+    min-width: 0;
+    text-align: center;
+}
+
+/* Título */
+
+.translation-timer-title {
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: 1px;
+
+    color: var(--muted);
+}
+
+/* Tempo decorrido e restante */
+
+.progress-time {
+    display: block;
+
+    font-size: 13px;
+    font-weight: 700;
+
+    color: var(--ink);
+
+    line-height: 1.5;
+    text-align: center;
+
+    white-space: normal;
+    overflow-wrap: anywhere;
+
+    font-variant-numeric: tabular-nums;
+}
+
+/* Ajustes para telas pequenas */
+
+@media (max-width: 480px) {
+
+    .translation-timer {
+        width: 100%;
+        max-width: 340px;
+
+        margin: 14px auto 22px;
+        padding: 12px 14px;
+    }
+
+    .progress-time {
+        font-size: 12px;
     }
 }

@@ -187,6 +187,7 @@ def placeholder_token(index):
     return f"ZXQKEEP{uuid.uuid4().hex.upper()}N{index:04d}QXZ"
 
 
+@lru_cache(maxsize=256)
 def compile_term_pattern(term):
     """Localiza palavras/expressões inteiras, sem substituir partes de palavras."""
     return re.compile(

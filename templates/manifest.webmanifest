@@ -1,0 +1,11 @@
+{
+  "name": "TXT Translator",
+  "short_name": "TXT Translator",
+  "description": "Tradução local e privada de TXT e PDF.",
+  "lang": "pt-BR",
+  "start_url": "/",
+  "display": "browser",
+  "background_color": "#f5f7fb",
+  "theme_color": "#635bff",
+  "icons": []
+}

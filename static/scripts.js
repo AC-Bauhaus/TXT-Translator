@@ -6,6 +6,10 @@ let selectedFile = null,
     translatedFilename = "traduzido.txt";
 
 let translationRun = 0;
+let translationStartedAt = null;
+let translationClockInterval = null;
+let latestTranslationProgress = 1;
+let translationProgressSamples = [];
 
 let translatedBlob = null;
 
@@ -104,12 +108,13 @@ document.addEventListener("click", event => {
 });
 
 function resetTranslationState() {
+    resetTranslationClock();
     translatedText = "";
     translatedFilename = "traduzido.txt";
     translatedBlob = null;
 
     $("arrow").className = "arrow";
-    $("arrow").textContent = "→";
+    $("arrow").innerHTML = "<span>→</span>";
 
     $("progress").style.display = "none";
     $("progressFill").style.width = "0%";
@@ -142,8 +147,8 @@ function chooseFile(file) {
 
     const extension = file.name.split(".").pop().toLowerCase();
 
-    if (!["txt", "pdf", "docx"].includes(extension)) {
-        showNotice("Selecione um arquivo TXT, PDF ou DOCX.", "error");
+    if (!["txt", "pdf"].includes(extension)) {
+        showNotice("Selecione um arquivo TXT ou PDF.", "error");
         return;
     }
 
@@ -161,14 +166,6 @@ function chooseFile(file) {
     fileIcon.textContent = extension.toUpperCase();
     fileIcon.classList.remove("file-icon-txt", "file-icon-pdf", "file-icon-docx");
     fileIcon.classList.add(`file-icon-${extension}`);
-
-    $("fileName").textContent = file.name;
-    $("fileSize").textContent = sizeLabel(file.size);
-    $("fileMeta").style.display = "flex";
-    drop.style.display = "none";
-    $("originalCount").textContent = sizeLabel(file.size);
-
-    resetTranslationState();
 
     $("fileName").textContent = file.name;
     $("fileSize").textContent = sizeLabel(file.size);
@@ -219,6 +216,159 @@ function showNotice(msg, type) {
     n.className = "notice" + (msg ? " " + type : "")
 }
 
+// Formata segundos em MM:SS ou HH:MM:SS
+function formatDuration(totalSeconds) {
+
+    const total = Math.max(0, Math.floor(totalSeconds));
+
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const seconds = total % 60;
+
+    const mm = String(minutes).padStart(2, "0");
+    const ss = String(seconds).padStart(2, "0");
+
+    if (hours > 0) {
+        return `${String(hours).padStart(2, "0")}:${mm}:${ss}`;
+    }
+
+    return `${mm}:${ss}`;
+}
+
+
+// Atualiza o cronômetro e calcula o tempo restante
+function updateTranslationClock(progress = latestTranslationProgress) {
+
+    if (translationStartedAt === null) return;
+
+    const now = Date.now();
+
+    latestTranslationProgress = Math.max(
+        1,
+        Math.min(100, Number(progress) || 1)
+    );
+
+    const elapsedSeconds = (now - translationStartedAt) / 1000;
+
+    // Guarda o histórico de progresso
+    translationProgressSamples.push({
+        time: now,
+        progress: latestTranslationProgress
+    });
+
+    // Mantém somente os últimos 30 segundos
+    translationProgressSamples = translationProgressSamples.filter(
+        sample => now - sample.time <= 30000
+    );
+
+    let remainingText = "Calculando...";
+
+    // Se a tradução estiver praticamente concluída
+    if (latestTranslationProgress >= 99.5) {
+
+        remainingText = "Concluído";
+
+    } else if (translationProgressSamples.length >= 2) {
+
+        const firstSample = translationProgressSamples[0];
+
+        const intervalSeconds = (now - firstSample.time) / 1000;
+
+        const progressGained =
+            latestTranslationProgress - firstSample.progress;
+
+        // Evita estimativas com poucos dados
+        if (intervalSeconds >= 5 && progressGained >= 0.5) {
+
+            const progressRate = progressGained / intervalSeconds;
+
+            const estimatedSeconds =
+                (100 - latestTranslationProgress) / progressRate;
+
+            if (
+                Number.isFinite(estimatedSeconds) &&
+                estimatedSeconds >= 0
+            ) {
+                remainingText = formatDuration(estimatedSeconds);
+            }
+        }
+    }
+
+    // Atualiza a interface
+    $("progressTime").textContent =
+        `Decorrido: ${formatDuration(elapsedSeconds)} | Restante: ${remainingText}`;
+}
+
+
+// Inicia o cronômetro
+function startTranslationClock() {
+
+    resetTranslationClock();
+
+    translationStartedAt = Date.now();
+
+    $("translationTimer").style.display = "flex";
+
+    updateTranslationClock(1);
+
+    // Atualiza a cada segundo
+    translationClockInterval = setInterval(() => {
+
+        updateTranslationClock(latestTranslationProgress);
+
+    }, 1000);
+}
+
+
+// Finaliza o cronômetro
+function finishTranslationClock(label) {
+
+    if (translationStartedAt === null) return 0;
+
+    const elapsedSeconds =
+        (Date.now() - translationStartedAt) / 1000;
+
+    if (translationClockInterval !== null) {
+        clearInterval(translationClockInterval);
+        translationClockInterval = null;
+    }
+
+    $("progressTime").textContent =
+        `${label}: ${formatDuration(elapsedSeconds)}`;
+
+    $("translationTimer").style.display = "flex";
+
+    translationStartedAt = null;
+    translationProgressSamples = [];
+
+    return elapsedSeconds;
+}
+
+
+// Reseta completamente o cronômetro
+function resetTranslationClock() {
+
+    if (translationClockInterval !== null) {
+        clearInterval(translationClockInterval);
+        translationClockInterval = null;
+    }
+
+    translationStartedAt = null;
+    latestTranslationProgress = 1;
+    translationProgressSamples = [];
+
+    const clock = $("progressTime");
+    const timerCard = $("translationTimer");
+
+    if (clock) {
+        clock.textContent = "";
+    }
+
+    if (timerCard) {
+        timerCard.style.display = "none";
+    }
+}
+
 $("translateBtn").addEventListener("click", async () => {
     if (!selectedFile) return;
 
@@ -232,6 +382,7 @@ $("translateBtn").addEventListener("click", async () => {
     $("progress").style.display = "block";
     $("progressFill").style.width = "1%";
     $("progressLabel").innerHTML = "TRADUZINDO…";
+    startTranslationClock();
 
     showNotice("", "");
 
@@ -300,11 +451,14 @@ $("translateBtn").addEventListener("click", async () => {
 
             $("progressFill").style.width = `${progress}%`;
 
+            // Atualiza o cálculo do tempo restante
+            updateTranslationClock(statusData.progress);
+
             if (statusData.status === "completed") {
                 break;
             }
 
-            await new Promise(resolve => setTimeout(resolve, 250));
+            await new Promise(resolve => setTimeout(resolve, 1000));
         }
 
         if (runId !== translationRun) return;
@@ -362,8 +516,9 @@ $("translateBtn").addEventListener("click", async () => {
             $("downloadBtn").classList.add("enabled");
         }
 
+        finishTranslationClock("Tempo total");
         $("arrow").className = "arrow done";
-        $("arrow").textContent = "✓";
+        $("arrow").innerHTML = "<span>✓</span>";
 
         $("progressFill").style.width = "100%";
         $("progressLabel").innerHTML = "TRADUÇÃO<br>CONCLUÍDA";
@@ -376,8 +531,9 @@ $("translateBtn").addEventListener("click", async () => {
     } catch (err) {
         if (runId !== translationRun) return;
 
+        finishTranslationClock("Tempo até o erro");
         $("arrow").className = "arrow";
-        $("arrow").textContent = "→";
+        $("arrow").innerHTML = "<span>→</span>";
 
         $("progressLabel").innerHTML = "ERRO NA<br>TRADUÇÃO";
 
@@ -434,27 +590,6 @@ $("downloadBtn").addEventListener("click", async () => {
 
             reader.readAsDataURL(blob);
         });
-
-        // No aplicativo desktop, abre a janela nativa para salvar.
-        if (window.pywebview?.api?.save_file) {
-            const result = await window.pywebview.api.save_file(
-                translatedFilename,
-                base64
-            );
-
-            if (result.cancelled) {
-                return;
-            }
-
-            if (!result.success) {
-                throw new Error(
-                    result.error || "Não foi possível salvar o arquivo."
-                );
-            }
-
-            showNotice("Arquivo salvo em: " + result.path, "success");
-            return;
-        }
 
         // Alternativa para quando o projeto é aberto no navegador.
         const url = URL.createObjectURL(blob);

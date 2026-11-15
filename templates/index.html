@@ -3,7 +3,9 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>TXT Translator</title>
+    <title>TXT Translator — Web Local</title>
+    <meta name="theme-color" content="#635bff">
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 
@@ -172,6 +174,35 @@
             </select>
         </div>
 
+        <!-- Painel de tempo da tradução -->
+        <div class="translation-timer" id="translationTimer">
+
+            <div class="translation-timer-icon">
+                <svg viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round">
+
+                    <circle cx="12" cy="12" r="9"/>
+                    <path d="M12 7v5l3 2"/>
+                </svg>
+            </div>
+
+            <div class="translation-timer-content">
+
+                <span class="translation-timer-title">
+                    TEMPO DA TRADUÇÃO
+                </span>
+
+                <div class="progress-time" id="progressTime">
+                    Aguardando tradução...
+                </div>
+
+            </div>
+
+        </div>
+
         <section class="workspace">
             <div class="pane">
                 <div class="pane-head">
@@ -188,7 +219,7 @@
                         <div class="upload-icon">↑</div>
                         <strong>Arraste seu arquivo para cá</strong>
                         <span>ou clique para procurar no dispositivo</span>
-                        <span style="margin-top:12px">Arquivos .TXT ou .PDF · até 10 MB</span>
+                        <span style="margin-top:12px">Arquivos .TXT ou .PDF · até 10 MB · processado localmente</span>
                     </label>
 
                     <input
@@ -259,8 +290,8 @@ Faça o upload de um arquivo e clique em traduzir.
         </section>
 
         <div class="footer-note">
-            Tradução local e privada: depois de instalar os modelos de idioma,
-            funciona sem internet e sem enviar seus textos a terceiros.
+            Tradução local e privada: o navegador acessa somente este servidor local.
+            Depois de instalar os modelos, a tradução funciona sem internet.
         </div>
     </main>
 
@@ -353,5 +384,10 @@ ZXQ_123">
         window.sourceLanguages = {{ source_languages|tojson }};
     </script>
     <script src="{{ url_for('static', filename='scripts.js') }}"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+        }
+    </script>
 </body>
 </html>
