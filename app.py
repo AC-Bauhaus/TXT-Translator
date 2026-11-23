@@ -83,16 +83,19 @@ TRANSLATION_MODES = {
     "fast": {
         "name": "Rápido",
         "chunk_size": 8000,
+        "beam_size": 1,
         "description": "Prioriza a velocidade de processamento.",
     },
     "balanced": {
         "name": "Equilibrado",
         "chunk_size": 4000,
+        "beam_size": 2,
         "description": "Equilibra velocidade e segmentação do texto.",
     },
     "quality": {
         "name": "Melhor qualidade",
         "chunk_size": 1800,
+        "beam_size": 4,
         "description": (
             "Processa trechos menores para preservar melhor o contexto local."
         ),
@@ -103,6 +106,10 @@ TRANSLATION_MODES = {
 translation_jobs = {}
 translation_jobs_lock = threading.Lock()
 
+# Guarda qual beam_size foi usado por último em cada par de idiomas, para
+# saber quando é preciso limpar o cache interno do Argos Translate.
+_translation_cache_state = {}
+_translation_cache_lock = threading.Lock()
 
 LANGUAGES = {
     "en": "Inglês",
@@ -144,11 +151,6 @@ LANGUAGES = {
     "auto": "Detectar idioma",
 }
 
-
-# Prioriza velocidade de geração no Argos Translate.
-argos_settings.beam_size = 1
-
-
 @lru_cache(maxsize=32)
 def get_translation_model(source, target):
     import argostranslate.translate
@@ -165,10 +167,48 @@ def get_translation_model(source, target):
 
     return translation
 
+def _clear_translation_cache(translation):
+    """Limpa o cache interno do Argos Translate para essa tradução.
 
-def translate_chunk(text, source, target):
+    O Argos guarda esse cache por texto (para repetir traduções
+    idênticas mais rápido), mas não leva o beam_size em conta. Sem
+    isso, ao trocar de modo, um trecho repetido voltaria com o
+    resultado antigo em vez de usar o beam_size novo.
+    """
+    cache = getattr(translation, "cache", None)
+
+    if isinstance(cache, dict):
+        cache.clear()
+
+    for attribute in ("t1", "t2", "underlying"):
+        nested = getattr(translation, attribute, None)
+
+        if nested is not None:
+            _clear_translation_cache(nested)
+
+def translate_chunk(text, source, target, mode="balanced"):
     try:
+        mode_settings = TRANSLATION_MODES.get(
+            mode,
+            TRANSLATION_MODES["balanced"],
+        )
+        beam_size = mode_settings["beam_size"]
+
+        # Ajusta a precisão da busca do tradutor conforme o modo escolhido.
+        argos_settings.beam_size = beam_size
+
         translation = get_translation_model(source, target)
+
+        # Se o modo mudou para esse par de idiomas desde a última vez,
+        # limpa o cache interno antes de traduzir — senão um trecho
+        # repetido voltaria com o resultado do beam_size anterior.
+        cache_key = (source, target)
+
+        with _translation_cache_lock:
+            if _translation_cache_state.get(cache_key) != beam_size:
+                _clear_translation_cache(translation)
+                _translation_cache_state[cache_key] = beam_size
+
         result = translation.translate(text)
 
     except ImportError as exc:
@@ -181,7 +221,6 @@ def translate_chunk(text, source, target):
         raise RuntimeError(f"Falha no mecanismo local: {exc}") from exc
 
     return text if result is None else result
-
 
 def placeholder_token(index):
     return f"ZXQKEEP{uuid.uuid4().hex.upper()}N{index:04d}QXZ"
@@ -438,7 +477,7 @@ def translate_text(
                 continue
 
             translated.append(
-                translate_chunk(unit, source, target)
+                translate_chunk(unit, source, target, mode)
             )
 
             completed_weight += max(1, len(unit))
@@ -619,6 +658,12 @@ def download_model():
             error=f"Não foi possível baixar/instalar o modelo: {exc}"
         ), 500
 
+def join_pdf_lines(text):
+    """Junta as linhas de um bloco de PDF para traduzir a frase inteira."""
+    # remove hifenização de fim de linha (ex.: "hy-\nphenated" -> "hyphenated")
+    text = re.sub(r"(\w)-\n([a-zà-ÿ])", r"\1\2", text)
+    # troca as demais quebras de linha por espaço
+    return re.sub(r"\s*\n\s*", " ", text).strip()
 
 def translate_pdf(
     data,
@@ -682,7 +727,13 @@ def translate_pdf(
                 valid_blocks.append((rect, block[4], weight))
                 total_weight += weight
 
-            pages_with_blocks.append((page, valid_blocks))
+        pages_with_blocks.append((page, valid_blocks))
+
+        if total_weight == 0:
+            raise ValueError(
+                "Este PDF não tem texto selecionável (provavelmente é "
+                "escaneado). Faça OCR antes de traduzir."
+            )
 
         completed_weight = 0
         translated_pages = []
@@ -710,7 +761,7 @@ def translate_pdf(
                         progress_callback(min(1.0, overall))
 
                 translated = translate_text(
-                    original_text,
+                    join_pdf_lines(original_text),
                     source,
                     target,
                     terms,
@@ -793,6 +844,18 @@ def translate_pdf(
     finally:
         document.close()
 
+def decode_txt_bytes(data):
+    """Lê o TXT em UTF-8, UTF-16 (com BOM), Windows-1252 ou Latin-1."""
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16")
+
+    for encoding in ("utf-8-sig", "cp1252"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    return data.decode("latin-1")
 
 def update_translation_job(job_id, progress):
     """Atualiza o progresso compartilhado com a interface."""
@@ -826,14 +889,7 @@ def run_translation_job(
         update_translation_job(job_id, 3)
 
         if extension == ".txt":
-            try:
-                original = data.decode("utf-8-sig")
-
-            except UnicodeDecodeError as exc:
-                raise ValueError(
-                    "Não foi possível ler o TXT como UTF-8. "
-                    "Salve-o em UTF-8 e tente novamente."
-                ) from exc
+            original = decode_txt_bytes(data)
 
             output = translate_text(
                 original,
@@ -896,9 +952,8 @@ def run_translation_job(
         message = str(exc)
 
         if (
-            "not installed" in message.lower()
+            "não existe modelo" in message.lower()
             or "no translation" in message.lower()
-            or "translation" in message.lower()
         ):
             message += (
                 "\n\nVerifique se o modelo offline para esse par de "

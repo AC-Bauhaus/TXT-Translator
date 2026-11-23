@@ -10,6 +10,7 @@ let translationStartedAt = null;
 let translationClockInterval = null;
 let latestTranslationProgress = 1;
 let translationProgressSamples = [];
+let smoothedRemainingSeconds = null;
 
 let translatedBlob = null;
 
@@ -289,14 +290,20 @@ function updateTranslationClock(progress = latestTranslationProgress) {
                 Number.isFinite(estimatedSeconds) &&
                 estimatedSeconds >= 0
             ) {
-                remainingText = formatDuration(estimatedSeconds);
+                smoothedRemainingSeconds =
+                    smoothedRemainingSeconds === null
+                        ? estimatedSeconds
+                        : smoothedRemainingSeconds +
+                          0.2 * (estimatedSeconds - smoothedRemainingSeconds);
+
+                remainingText = formatDuration(smoothedRemainingSeconds);
             }
         }
     }
 
     // Atualiza a interface
     $("progressTime").textContent =
-        `Decorrido: ${formatDuration(elapsedSeconds)} | Restante: ${remainingText}`;
+        `Decorrido: ${formatDuration(elapsedSeconds)} | Restante (Estimado): ${remainingText}`;
 }
 
 
@@ -356,6 +363,7 @@ function resetTranslationClock() {
     translationStartedAt = null;
     latestTranslationProgress = 1;
     translationProgressSamples = [];
+    smoothedRemainingSeconds = null;
 
     const clock = $("progressTime");
     const timerCard = $("translationTimer");
