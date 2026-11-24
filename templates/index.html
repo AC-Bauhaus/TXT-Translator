@@ -41,7 +41,6 @@
                 <label for="source">De</label>
 
                 <select id="source">
-                    <option value="auto">Detectar idioma</option>
                     {% for code, name in source_languages.items() if code != 'auto' %}
                     <option value="{{ code }}">{{ name }}</option>
                     {% endfor %}
@@ -55,7 +54,7 @@
 
                 <select id="target">
                     {% for code, name in languages.items() %}
-                    <option value="{{ code }}" {% if code == 'pt' %}selected{% endif %}>{{ name }}</option>
+                    <option value="{{ code }}" {% if code == 'pb' %}selected{% endif %}>{{ name }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -219,7 +218,7 @@
                         <div class="upload-icon">↑</div>
                         <strong>Arraste seu arquivo para cá</strong>
                         <span>ou clique para procurar no dispositivo</span>
-                        <span style="margin-top:12px">Arquivos .TXT ou .PDF · até 10 MB · processado localmente</span>
+                        <span style="margin-top:12px">Arquivos .TXT ou .PDF · até 50 MB · processado localmente</span>
                     </label>
 
                     <input
@@ -259,6 +258,10 @@
 
                 <div class="progress" id="progress">
                     <span id="progressFill"></span>
+                </div>
+                
+                <div class="translation-percent" id="translationPercent">
+                    0%
                 </div>
 
                 <div class="middle-label" id="progressLabel">

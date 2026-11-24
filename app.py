@@ -1,22 +1,20 @@
 
 import json
 import os
-
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
-
 import io
 import re
 import sys
 import time
 import uuid
 import threading
-
 from functools import lru_cache
 from pathlib import Path
-
 import argostranslate.settings as argos_settings
-
+import torch
+import transformers
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from flask import Flask, jsonify, render_template, request, send_file
 
 
@@ -77,7 +75,7 @@ def save_settings(data):
 
 
 app = Flask(__name__, template_folder=resource_path("templates"))
-app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
 TRANSLATION_MODES = {
     "fast": {
@@ -85,20 +83,23 @@ TRANSLATION_MODES = {
         "chunk_size": 8000,
         "beam_size": 1,
         "description": "Prioriza a velocidade de processamento.",
+        "engine": "argos",
     },
+
     "balanced": {
         "name": "Equilibrado",
-        "chunk_size": 4000,
+        "chunk_size": 1800,
         "beam_size": 2,
-        "description": "Equilibra velocidade e segmentação do texto.",
+        "description": "Usa NLLB-200 600M buscando equilíbrio entre velocidade e qualidade.",
+        "engine": "nllb-600m",
     },
+
     "quality": {
         "name": "Melhor qualidade",
-        "chunk_size": 1800,
+        "chunk_size": 1200,
         "beam_size": 4,
-        "description": (
-            "Processa trechos menores para preservar melhor o contexto local."
-        ),
+        "description": "Usa NLLB-200 1.3B priorizando a qualidade da tradução.",
+        "engine": "nllb-1.3b",
     },
 }
 
@@ -151,6 +152,42 @@ LANGUAGES = {
     "auto": "Detectar idioma",
 }
 
+NLLB_LANGUAGES = {
+    "en": "eng_Latn",
+    "pt": "por_Latn",
+    "pb": "por_Latn",
+    "es": "spa_Latn",
+    "fr": "fra_Latn",
+    "de": "deu_Latn",
+    "it": "ita_Latn",
+    "ja": "jpn_Jpan",
+    "ko": "kor_Hang",
+    "zh": "zho_Hans",
+    "ru": "rus_Cyrl",
+    "nl": "nld_Latn",
+    "pl": "pol_Latn",
+    "tr": "tur_Latn",
+    "uk": "ukr_Cyrl",
+    "ar": "arb_Arab",
+    "hi": "hin_Deva",
+    "hu": "hun_Latn",
+    "id": "ind_Latn",
+    "ms": "zsm_Latn",
+    "sv": "swe_Latn",
+    "fi": "fin_Latn",
+    "el": "ell_Grek",
+    "he": "heb_Hebr",
+    "cs": "ces_Latn",
+    "da": "dan_Latn",
+    "fa": "pes_Arab",
+    "ga": "gle_Latn",
+    "ro": "ron_Latn",
+    "bg": "bul_Cyrl",
+    "hr": "hrv_Latn",
+    "sk": "slk_Latn",
+    "sl": "slv_Latn",
+}
+
 @lru_cache(maxsize=32)
 def get_translation_model(source, target):
     import argostranslate.translate
@@ -186,12 +223,643 @@ def _clear_translation_cache(translation):
         if nested is not None:
             _clear_translation_cache(nested)
 
+@lru_cache(maxsize=2)
+def get_nllb_model(model_name):
+    if model_name == "nllb-600m":
+        model_id = "facebook/nllb-200-distilled-600M"
+    elif model_name == "nllb-1.3b":
+        model_id = "facebook/nllb-200-distilled-1.3B"
+    else:
+        raise ValueError(f"Modelo NLLB desconhecido: {model_name}")
+
+    model_path = resource_path(f"models/{model_name}")
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_path,
+        local_files_only=True,
+    )
+
+    model = AutoModelForSeq2SeqLM.from_pretrained(
+        model_path,
+        local_files_only=True,
+    )
+
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu"
+    )
+
+    model = model.to(device)
+    model.eval()
+
+    return tokenizer, model, device
+
+
+def adapt_to_brazilian_portuguese(text):
+    """
+    Adapta uma tradução em português produzida pelo NLLB
+    para o padrão brasileiro (PT-BR).
+
+    O NLLB usa por_Latn para português e não possui um código
+    separado de pt-BR. Esta etapa normaliza:
+      - vocabulário PT-PT;
+      - ortografia europeia;
+      - construções verbais de 2ª pessoa;
+      - algumas construções e expressões muito comuns em PT-PT.
+
+    A ordem das regras é importante: expressões completas são
+    corrigidas antes de palavras isoladas.
+    """
+    import re
+
+    def preserve_case(match, replacement):
+        original = match.group(0)
+
+        if original.isupper():
+            return replacement.upper()
+
+        if original[:1].isupper():
+            return replacement[:1].upper() + replacement[1:]
+
+        return replacement
+
+    replacements = [
+        # ----------------------------------------------------------
+        # Construções com TU: transformar para o tratamento mais
+        # comum do português brasileiro e ajustar a conjugação.
+        # ----------------------------------------------------------
+        (r"\btu\s+estás\b", "você está"),
+        (r"\btu\s+estais\b", "vocês estão"),
+        (r"\btu\s+tens\b", "você tem"),
+        (r"\btu\s+tendes\b", "vocês têm"),
+        (r"\btu\s+podes\b", "você pode"),
+        (r"\btu\s+podeis\b", "vocês podem"),
+        (r"\btu\s+queres\b", "você quer"),
+        (r"\btu\s+quereis\b", "vocês querem"),
+        (r"\btu\s+vais\b", "você vai"),
+        (r"\btu\s+ides\b", "vocês vão"),
+        (r"\btu\s+sabes\b", "você sabe"),
+        (r"\btu\s+sabeis\b", "vocês sabem"),
+        (r"\btu\s+fazes\b", "você faz"),
+        (r"\btu\s+fazeis\b", "vocês fazem"),
+        (r"\btu\s+dizes\b", "você diz"),
+        (r"\btu\s+dizeis\b", "vocês dizem"),
+        (r"\btu\s+vens\b", "você vem"),
+        (r"\btu\s+vindes\b", "vocês vêm"),
+        (r"\btu\s+deves\b", "você deve"),
+        (r"\btu\s+deveis\b", "vocês devem"),
+        (r"\btu\s+consegues\b", "você consegue"),
+        (r"\btu\s+conseguis\b", "vocês conseguem"),
+        (r"\btu\s+precisas\b", "você precisa"),
+        (r"\btu\s+precisais\b", "vocês precisam"),
+        (r"\btu\s+deixas\b", "você deixa"),
+        (r"\btu\s+deixais\b", "vocês deixam"),
+        (r"\btu\s+achas\b", "você acha"),
+        (r"\btu\s+achais\b", "vocês acham"),
+        (r"\btu\s+pensas\b", "você pensa"),
+        (r"\btu\s+pensais\b", "vocês pensam"),
+        (r"\btu\s+querias\b", "você queria"),
+        (r"\btu\s+queríeis\b", "vocês queriam"),
+        (r"\btu\s+tinhas\b", "você tinha"),
+        (r"\btu\s+tínheis\b", "vocês tinham"),
+        (r"\btu\s+podias\b", "você podia"),
+        (r"\btu\s+podíeis\b", "vocês podiam"),
+        (r"\btu\s+devias\b", "você devia"),
+        (r"\btu\s+devíeis\b", "vocês deviam"),
+        (r"\btu\s+foste\b", "você foi"),
+        (r"\btu\s+fizeste\b", "você fez"),
+        (r"\btu\s+disse\b", "você disse"),
+        (r"\btu\s+viste\b", "você viu"),
+        (r"\btu\s+puseste\b", "você colocou"),
+        (r"\btu\s+quiseste\b", "você quis"),
+
+        # Pronomes de tratamento.
+        (r"\bvosso\b", "seu"),
+        (r"\bvossa\b", "sua"),
+        (r"\bvossos\b", "seus"),
+        (r"\bvossas\b", "suas"),
+        (r"\bconnosco\b", "conosco"),
+        (r"\bconvosco\b", "com vocês"),
+
+        # ----------------------------------------------------------
+        # Expressões e vocabulário fortemente característicos de PT-PT
+        # ----------------------------------------------------------
+        (r"\bpequeno[- ]almoço\b", "café da manhã"),
+        (r"\bcasa de banho\b", "banheiro"),
+        (r"\bquarto de banho\b", "banheiro"),
+        (r"\bpalavras[- ]passe\b", "senhas"),
+        (r"\bpalavra[- ]passe\b", "senha"),
+        (r"\bcódigo postal\b", "CEP"),
+        (r"\bcorreio electrónico\b", "e-mail"),
+        (r"\bcorreio eletrónico\b", "e-mail"),
+        (r"\bcorreio electrónico\b", "e-mail"),
+        (r"\bbase de dados\b", "banco de dados"),
+        (r"\bbases de dados\b", "bancos de dados"),
+        (r"\bde seguida\b", "em seguida"),
+        (r"\bde momento\b", "no momento"),
+        (r"\bà partida\b", "a princípio"),
+        (r"\bpor forma a\b", "para"),
+        (r"\bde modo a\b", "para"),
+        (r"\bde maneira a\b", "para"),
+        (r"\bter em conta\b", "levar em conta"),
+        (r"\bdar conta\b", "perceber"),
+        (r"\bdar-se conta\b", "perceber"),
+        (r"\bdar-se por conta\b", "perceber"),
+        (r"\bem termos de\b", "em relação a"),
+
+        # ----------------------------------------------------------
+        # Construções que precisam de ajuste de artigo após a
+        # conversão do vocabulário.
+        # ----------------------------------------------------------
+        (r"\bno ecrã\b", "na tela"),
+        (r"\bno ecrãs\b", "nas telas"),
+        (r"\bà aplicação\b", "ao aplicativo"),
+        (r"\bà aplicações\b", "aos aplicativos"),
+        (r"\ba aplicação\b", "o aplicativo"),
+        (r"\bas aplicações\b", "os aplicativos"),
+        (r"\buma aplicação\b", "um aplicativo"),
+        (r"\buma aplicações\b", "uns aplicativos"),
+        (r"\bna aplicação\b", "no aplicativo"),
+        (r"\bnas aplicações\b", "nos aplicativos"),
+        (r"\bda aplicação\b", "do aplicativo"),
+        (r"\bdas aplicações\b", "dos aplicativos"),
+        (r"\besta aplicação\b", "este aplicativo"),
+        (r"\bestas aplicações\b", "estes aplicativos"),
+        (r"\bessa aplicação\b", "esse aplicativo"),
+        (r"\bessas aplicações\b", "esses aplicativos"),
+
+        (r"\bacessar ao\b", "acessar o"),
+
+        # Verbos/expressões frequentes que permanecem em PT-PT.
+        (r"\bapanhar\b", "pegar"),
+        (r"\bapanha\b", "pega"),
+        (r"\bapanhei\b", "peguei"),
+        (r"\bapanhou\b", "pegou"),
+        (r"\bapanhará\b", "pegará"),
+        (r"\bter de\b", "ter que"),
+        (r"\btens de\b", "tem que"),
+        (r"\btem de\b", "tem que"),
+        (r"\btêm de\b", "têm que"),
+        (r"\bdeverá de\b", "deverá"),
+        (r"\bdeveriam de\b", "deveriam"),
+
+        # ----------------------------------------------------------
+        # Informática / tecnologia
+        # ----------------------------------------------------------
+        (r"\bficheiros\b", "arquivos"),
+        (r"\bficheiro\b", "arquivo"),
+        (r"\butilizadores\b", "usuários"),
+        (r"\butilizadoras\b", "usuárias"),
+        (r"\butilizador\b", "usuário"),
+        (r"\butilizadora\b", "usuária"),
+        (r"\becrãs\b", "telas"),
+        (r"\becrã\b", "tela"),
+        (r"\btelemóveis\b", "celulares"),
+        (r"\btelemóvel\b", "celular"),
+        (r"\bcomputadores portáteis\b", "notebooks"),
+        (r"\bcomputador portátil\b", "notebook"),
+        (r"\baplicações\b", "aplicativos"),
+        (r"\baplicação\b", "aplicativo"),
+        (r"\bprogramas informáticos\b", "programas de computador"),
+        (r"\bprograma informático\b", "programa de computador"),
+        (r"\bpágina web\b", "página da web"),
+        (r"\bpáginas web\b", "páginas da web"),
+        (r"\bpalavra-passe\b", "senha"),
+        (r"\bpalavras-passe\b", "senhas"),
+
+        # ----------------------------------------------------------
+        # Transporte
+        # ----------------------------------------------------------
+        (r"\bautocarros\b", "ônibus"),
+        (r"\bautocarro\b", "ônibus"),
+        (r"\bcomboios\b", "trens"),
+        (r"\bcomboio\b", "trem"),
+        (r"\bmetro\b", "metrô"),
+        (r"\bparagem de autocarro\b", "ponto de ônibus"),
+        (r"\bparagem\b", "parada"),
+        (r"\bcondutores\b", "motoristas"),
+        (r"\bcondutor\b", "motorista"),
+
+        # ----------------------------------------------------------
+        # Alimentação / casa / cotidiano
+        # ----------------------------------------------------------
+        (r"\bsumo de laranja\b", "suco de laranja"),
+        (r"\bsumos\b", "sucos"),
+        (r"\bsumo\b", "suco"),
+        (r"\bgelados\b", "sorvetes"),
+        (r"\bgelado\b", "sorvete"),
+        (r"\bfiambre\b", "presunto"),
+        (r"\bfrigoríficos\b", "geladeiras"),
+        (r"\bfrigorífico\b", "geladeira"),
+        (r"\bpeúgas\b", "meias"),
+        (r"\bcuecas\b", "cuecas"),
+        (r"\bcamisolas\b", "blusas"),
+        (r"\bcamisola\b", "blusa"),
+        (r"\bcalções\b", "shorts"),
+        (r"\bautocolantes\b", "adesivos"),
+        (r"\bautocolante\b", "adesivo"),
+
+        # ----------------------------------------------------------
+        # Trabalho / educação / serviços
+        # ----------------------------------------------------------
+        (r"\bempregado de mesa\b", "garçom"),
+        (r"\bempregada de mesa\b", "garçonete"),
+        (r"\bordenados\b", "salários"),
+        (r"\bordenado\b", "salário"),
+        (r"\bdespedimentos\b", "demissões"),
+        (r"\bdespedimento\b", "demissão"),
+        (r"\bdespedido\b", "demitido"),
+        (r"\bdespedida\b", "demitida"),
+        (r"\bpropinas\b", "mensalidades"),
+        (r"\bpropina\b", "mensalidade"),
+        (r"\bensino secundário\b", "ensino médio"),
+        (r"\bparque de estacionamento\b", "estacionamento"),
+        (r"\besquadra de polícia\b", "delegacia de polícia"),
+        (r"\besquadra\b", "delegacia"),
+
+        # ----------------------------------------------------------
+        # Vocabulário coloquial
+        # ----------------------------------------------------------
+        (r"\bfixe\b", "legal"),
+        (r"\bfixolas\b", "legal"),
+        (r"\bgiro\b", "legal"),
+        (r"\bgira\b", "legal"),
+        (r"\bgiros\b", "legais"),
+        (r"\bgiras\b", "legais"),
+        (r"\bmiúdos\b", "garotos"),
+        (r"\bmiúdas\b", "garotas"),
+        (r"\bmiúdo\b", "garoto"),
+        (r"\bmiúda\b", "garota"),
+        (r"\braparigas\b", "meninas"),
+        (r"\brapariga\b", "menina"),
+        (r"\bputos\b", "garotos"),
+        (r"\bputo\b", "garoto"),
+        (r"\bputas\b", "garotas"),
+        (r"\bputo\b", "garoto"),
+
+        # ----------------------------------------------------------
+        # Verbos e formas lexicais
+        # ----------------------------------------------------------
+        (r"\butilizámos\b", "usamos"),
+        (r"\butilizámos\b", "usamos"),
+        (r"\butilizarão\b", "usarão"),
+        (r"\butilizará\b", "usará"),
+        (r"\butilizaria\b", "usaria"),
+        (r"\butilizavam\b", "usavam"),
+        (r"\butilizava\b", "usava"),
+        (r"\butilizado\b", "usado"),
+        (r"\butilizada\b", "usada"),
+        (r"\butilizados\b", "usados"),
+        (r"\butilizadas\b", "usadas"),
+        (r"\butilizam\b", "usam"),
+        (r"\butiliza\b", "usa"),
+        (r"\butilizar\b", "usar"),
+
+        (r"\baceder\b", "acessar"),
+        (r"\bacedido\b", "acessado"),
+        (r"\bacedida\b", "acessada"),
+        (r"\bacesso\b", "acesso"),
+        (r"\bseleccionar\b", "selecionar"),
+        (r"\bseleccionado\b", "selecionado"),
+        (r"\bseleccionada\b", "selecionada"),
+        (r"\bseleccionados\b", "selecionados"),
+        (r"\bseleccionadas\b", "selecionadas"),
+        (r"\bselecciona\b", "seleciona"),
+        (r"\bseleccionar\b", "selecionar"),
+
+        (r"\bactualizações\b", "atualizações"),
+        (r"\bactualização\b", "atualização"),
+        (r"\bactualizado\b", "atualizado"),
+        (r"\bactualizada\b", "atualizada"),
+        (r"\bactualizar\b", "atualizar"),
+        (r"\bactualmente\b", "atualmente"),
+        (r"\bactual\b", "atual"),
+
+        (r"\bactividades\b", "atividades"),
+        (r"\bactividade\b", "atividade"),
+        (r"\bactivar\b", "ativar"),
+        (r"\bactiva\b", "ativa"),
+        (r"\bactivado\b", "ativado"),
+        (r"\bactivada\b", "ativada"),
+        (r"\bactivação\b", "ativação"),
+
+        (r"\bdesactivar\b", "desativar"),
+        (r"\bdesactiva\b", "desativa"),
+        (r"\bdesactivado\b", "desativado"),
+        (r"\bdesactivada\b", "desativada"),
+
+        (r"\boptimizações\b", "otimizações"),
+        (r"\boptimização\b", "otimização"),
+        (r"\boptimizar\b", "otimizar"),
+        (r"\bóptimas\b", "ótimas"),
+        (r"\bóptimos\b", "ótimos"),
+        (r"\bóptima\b", "ótima"),
+        (r"\bóptimo\b", "ótimo"),
+
+        (r"\bprojectos\b", "projetos"),
+        (r"\bprojecto\b", "projeto"),
+        (r"\bprojectar\b", "projetar"),
+
+        (r"\bobjectivos\b", "objetivos"),
+        (r"\bobjectivo\b", "objetivo"),
+        (r"\bobjectivas\b", "objetivas"),
+        (r"\bobjectiva\b", "objetiva"),
+
+        # ----------------------------------------------------------
+        # Ortografia europeia: c, ct, cc etc.
+        # ----------------------------------------------------------
+        (r"\bactividade\b", "atividade"),
+        (r"\bactividades\b", "atividades"),
+        (r"\bacto\b", "ato"),
+        (r"\bactos\b", "atos"),
+        (r"\bafecto\b", "afeto"),
+        (r"\bafectos\b", "afetos"),
+        (r"\bafectar\b", "afetar"),
+        (r"\bafectado\b", "afetado"),
+        (r"\bafectada\b", "afetada"),
+        (r"\bcolectivo\b", "coletivo"),
+        (r"\bcolectiva\b", "coletiva"),
+        (r"\bcolectivos\b", "coletivos"),
+        (r"\bcolectivas\b", "coletivas"),
+        (r"\bdirecto\b", "direto"),
+        (r"\bdirecta\b", "direta"),
+        (r"\bdirectamente\b", "diretamente"),
+        (r"\bdirecção\b", "direção"),
+        (r"\bdirecções\b", "direções"),
+        (r"\binteracção\b", "interação"),
+        (r"\binteracções\b", "interações"),
+        (r"\bprotecção\b", "proteção"),
+        (r"\bprotecções\b", "proteções"),
+        (r"\bselecção\b", "seleção"),
+        (r"\bselecções\b", "seleções"),
+        (r"\bconcepção\b", "concepção"),
+        (r"\bpercepção\b", "percepção"),
+        (r"\brecepção\b", "recepção"),
+        (r"\bexcepção\b", "exceção"),
+        (r"\bexcepções\b", "exceções"),
+        (r"\bcontactos\b", "contatos"),
+        (r"\bcontacto\b", "contato"),
+        (r"\bfactos\b", "fatos"),
+        (r"\bfacto\b", "fato"),
+        (r"\bcarácter\b", "caráter"),
+        (r"\bcarácter\b", "caráter"),
+
+        # ----------------------------------------------------------
+        # Formas de 2ª pessoa que podem aparecer sem "tu".
+        # Elas são tratadas somente quando a forma é claramente
+        # uma conjugação de 2ª pessoa singular/plural.
+        # ----------------------------------------------------------
+        (r"\bestás\b", "está"),
+        (r"\bestais\b", "estão"),
+        (r"\btens\b", "tem"),
+        (r"\btendes\b", "têm"),
+        (r"\bpodes\b", "pode"),
+        (r"\bpodeis\b", "podem"),
+        (r"\bqueres\b", "quer"),
+        (r"\bquereis\b", "querem"),
+        (r"\bvais\b", "vai"),
+        (r"\bides\b", "vão"),
+        (r"\bsabes\b", "sabe"),
+        (r"\bsabeis\b", "sabem"),
+        (r"\bfazes\b", "faz"),
+        (r"\bfazeis\b", "fazem"),
+        (r"\bdizes\b", "diz"),
+        (r"\bdizeis\b", "dizem"),
+        (r"\bvês\b", "vê"),
+        (r"\bvedes\b", "veem"),
+        (r"\bvens\b", "vem"),
+        (r"\bvindes\b", "vêm"),
+        (r"\bdeves\b", "deve"),
+        (r"\bdeveis\b", "devem"),
+        (r"\bconsegues\b", "consegue"),
+        (r"\bconseguis\b", "conseguem"),
+        (r"\bprecisas\b", "precisa"),
+        (r"\bprecisais\b", "precisam"),
+        (r"\bdeixas\b", "deixa"),
+        (r"\bdeixais\b", "deixam"),
+        (r"\bachas\b", "acha"),
+        (r"\bachais\b", "acham"),
+        (r"\bpensas\b", "pensa"),
+        (r"\bpensais\b", "pensam"),
+
+        # ----------------------------------------------------------
+        # Palavras com grafia/acentuação diferente
+        # ----------------------------------------------------------
+        (r"\bperíodo\b", "período"),
+        (r"\bvídeo\b", "vídeo"),
+        (r"\bautocarro\b", "ônibus"),
+        (r"\btelemóvel\b", "celular"),
+        (r"\bficheiro\b", "arquivo"),
+        (r"\becrã\b", "tela"),
+    ]
+
+    result = text
+
+    for pattern, replacement in replacements:
+        result = re.sub(
+            pattern,
+            lambda match, replacement=replacement:
+                preserve_case(match, replacement),
+            result,
+            flags=re.IGNORECASE | re.UNICODE,
+        )
+
+    # Limpeza de espaçamento criada por algumas substituições.
+    result = re.sub(r"[ \t]+([,.!?;:])", r"\1", result)
+    result = re.sub(r" {2,}", " ", result)
+
+    return result
+
+
+def translate_chunk_nllb(text, source, target, mode="balanced"):
+    mode_settings = TRANSLATION_MODES.get(
+        mode,
+        TRANSLATION_MODES["balanced"],
+    )
+
+    model_name = mode_settings["engine"]
+
+    if source not in NLLB_LANGUAGES:
+        raise RuntimeError(
+            f"O idioma de origem '{source}' não é suportado pelo NLLB."
+        )
+
+    if target not in NLLB_LANGUAGES:
+        raise RuntimeError(
+            f"O idioma de destino '{target}' não é suportado pelo NLLB."
+        )
+
+    tokenizer, model, device = get_nllb_model(model_name)
+
+    source_lang = NLLB_LANGUAGES[source]
+    target_lang = NLLB_LANGUAGES[target]
+
+    tokenizer.src_lang = source_lang
+
+    # O NLLB possui limite de entrada de 512 tokens.
+    # 450 deixa margem para tokens especiais sem truncar conteúdo.
+    max_input_tokens = 450
+
+    def token_count(value):
+        return len(
+            tokenizer(
+                value,
+                add_special_tokens=True,
+                truncation=False,
+            )["input_ids"]
+        )
+
+    def split_text_by_tokens(value):
+        """Divide o texto sem ultrapassar o limite seguro do NLLB."""
+        if not value.strip():
+            return [value]
+
+        parts = []
+        paragraphs = re.split(r"(\n+)", value)
+
+        for paragraph in paragraphs:
+            if not paragraph or paragraph.isspace():
+                parts.append(paragraph)
+                continue
+
+            sentences = re.split(
+                r"(?<=[.!?。！？])\s+",
+                paragraph,
+            )
+
+            current = ""
+
+            for sentence in sentences:
+                sentence = sentence.strip()
+
+                if not sentence:
+                    continue
+
+                candidate = (
+                    f"{current} {sentence}".strip()
+                    if current
+                    else sentence
+                )
+
+                if token_count(candidate) <= max_input_tokens:
+                    current = candidate
+                    continue
+
+                if current:
+                    parts.append(current)
+                    current = ""
+
+                if token_count(sentence) <= max_input_tokens:
+                    current = sentence
+                    continue
+
+                # Frase muito grande: divide por palavras.
+                words = sentence.split()
+                word_buffer = ""
+
+                for word in words:
+                    candidate = (
+                        f"{word_buffer} {word}".strip()
+                        if word_buffer
+                        else word
+                    )
+
+                    if token_count(candidate) <= max_input_tokens:
+                        word_buffer = candidate
+                    else:
+                        if word_buffer:
+                            parts.append(word_buffer)
+
+                        # Palavra isolada extremamente longa.
+                        if token_count(word) > max_input_tokens:
+                            # Divide por caracteres como último recurso.
+                            char_buffer = ""
+                            for char in word:
+                                char_candidate = char_buffer + char
+
+                                if token_count(char_candidate) <= max_input_tokens:
+                                    char_buffer = char_candidate
+                                else:
+                                    if char_buffer:
+                                        parts.append(char_buffer)
+                                    char_buffer = char
+
+                            word_buffer = char_buffer
+                        else:
+                            word_buffer = word
+
+                if word_buffer:
+                    current = word_buffer
+
+            if current:
+                parts.append(current)
+
+        return parts
+
+    text_parts = split_text_by_tokens(text)
+    translated_parts = []
+
+    forced_bos_token_id = tokenizer.convert_tokens_to_ids(
+        target_lang
+    )
+
+    for part in text_parts:
+        if not part or part.isspace():
+            translated_parts.append(part)
+            continue
+
+        encoded = tokenizer(
+            part,
+            return_tensors="pt",
+            truncation=False,
+        )
+
+        encoded = {
+            key: value.to(device)
+            for key, value in encoded.items()
+        }
+
+        with torch.inference_mode():
+            generated_tokens = model.generate(
+                **encoded,
+                forced_bos_token_id=forced_bos_token_id,
+                num_beams=mode_settings["beam_size"],
+                max_length=512,
+            )
+
+        translated_parts.append(
+            tokenizer.batch_decode(
+                generated_tokens,
+                skip_special_tokens=True,
+            )[0]
+        )
+
+    # Junta as partes antes da adaptação para PT-BR. Isso evita que
+    # uma regra dependa da fronteira artificial de um chunk.
+    translated_text = "".join(translated_parts)
+
+    if target == "pb":
+        translated_text = adapt_to_brazilian_portuguese(
+            translated_text
+        )
+
+    return translated_text
+
+
 def translate_chunk(text, source, target, mode="balanced"):
     try:
         mode_settings = TRANSLATION_MODES.get(
             mode,
             TRANSLATION_MODES["balanced"],
         )
+
+        if mode_settings["engine"].startswith("nllb"):
+            return translate_chunk_nllb(
+                text,
+                source,
+                target,
+                mode,
+            )
+
         beam_size = mode_settings["beam_size"]
 
         # Ajusta a precisão da busca do tradutor conforme o modo escolhido.
@@ -300,27 +968,6 @@ def protect_and_apply_glossary(text, terms, glossary, source, target):
 
     return text, replacements
 
-
-def detect_language(text):
-    try:
-        from langdetect import detect, LangDetectException
-
-        try:
-            return detect(text[:10000])
-
-        except LangDetectException as exc:
-            raise ValueError(
-                "Não foi possível detectar o idioma. "
-                "Selecione o idioma de origem manualmente."
-            ) from exc
-
-    except ImportError as exc:
-        raise RuntimeError(
-            "O detector local de idioma não está instalado. "
-            "Reinstale as dependências do aplicativo."
-        ) from exc
-
-
 def infer_portuguese_gender(word):
     """Heurística simples para inferir gênero de palavras em português."""
     parts = word.strip().split()
@@ -407,9 +1054,6 @@ def translate_text(
             progress_callback(1.0)
 
         return text
-
-    if source == "auto":
-        source = detect_language(text)
 
     protected, replacements = protect_and_apply_glossary(
         text,
@@ -676,14 +1320,14 @@ def translate_pdf(
 ):
     """Traduz blocos de texto de um PDF e informa o progresso real."""
     try:
-        import fitz
+        import pymupdf
 
     except ImportError as exc:
         raise RuntimeError(
             "A biblioteca PyMuPDF não está instalada."
         ) from exc
 
-    document = fitz.open(stream=data, filetype="pdf")
+    document = pymupdf.open(stream=data, filetype="pdf")
 
     font_candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -717,7 +1361,7 @@ def translate_pdf(
                 if not original:
                     continue
 
-                rect = fitz.Rect(block[:4])
+                rect = pymupdf.Rect(block[:4])
 
                 if rect.is_empty or rect.is_infinite:
                     continue
@@ -727,7 +1371,7 @@ def translate_pdf(
                 valid_blocks.append((rect, block[4], weight))
                 total_weight += weight
 
-        pages_with_blocks.append((page, valid_blocks))
+                pages_with_blocks.append((page, valid_blocks))
 
         if total_weight == 0:
             raise ValueError(
@@ -991,7 +1635,7 @@ def translate():
     if not data:
         return jsonify(error="O arquivo está vazio."), 400
 
-    source = request.form.get("source", "auto")
+    source = request.form.get("source", "en")
     target = request.form.get("target", "pb")
     mode = request.form.get("mode", "balanced")
 

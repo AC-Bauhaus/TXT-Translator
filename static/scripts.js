@@ -117,6 +117,8 @@ function resetTranslationState() {
     $("arrow").className = "arrow";
     $("arrow").innerHTML = "<span>→</span>";
 
+    $("translationPercent").style.display = "none";
+    $("translationPercent").textContent = "0%";
     $("progress").style.display = "none";
     $("progressFill").style.width = "0%";
 
@@ -153,8 +155,8 @@ function chooseFile(file) {
         return;
     }
 
-    if (file.size > 10 * 1024 * 1024) {
-        showNotice("O arquivo excede o limite de 10 MB.", "error");
+    if (file.size > 50 * 1024 * 1024) {
+        showNotice("O arquivo excede o limite de 50 MB.", "error");
         return;
     }
 
@@ -387,6 +389,8 @@ $("translateBtn").addEventListener("click", async () => {
     btn.textContent = "Traduzindo…";
 
     $("arrow").className = "arrow working";
+    $("translationPercent").style.display = "block";
+    $("translationPercent").textContent = "0%";
     $("progress").style.display = "block";
     $("progressFill").style.width = "1%";
     $("progressLabel").innerHTML = "TRADUZINDO…";
@@ -458,6 +462,7 @@ $("translateBtn").addEventListener("click", async () => {
             );
 
             $("progressFill").style.width = `${progress}%`;
+            $("translationPercent").textContent = `${Math.round(progress)}%`;
 
             // Atualiza o cálculo do tempo restante
             updateTranslationClock(statusData.progress);
@@ -526,6 +531,7 @@ $("translateBtn").addEventListener("click", async () => {
 
         finishTranslationClock("Tempo total");
         $("arrow").className = "arrow done";
+        $("translationPercent").style.display = "none";
         $("arrow").innerHTML = "<span>✓</span>";
 
         $("progressFill").style.width = "100%";
@@ -542,6 +548,8 @@ $("translateBtn").addEventListener("click", async () => {
         finishTranslationClock("Tempo até o erro");
         $("arrow").className = "arrow";
         $("arrow").innerHTML = "<span>→</span>";
+        $("translationPercent").style.display = "none";
+        $("translationPercent").textContent = "0%";
 
         $("progressLabel").innerHTML = "ERRO NA<br>TRADUÇÃO";
 
@@ -750,7 +758,7 @@ $("addGlossary").addEventListener('click', async () => {
     const entry = {
         source: original,
         translation,
-        source_lang: sourceCode === 'auto' ? '*' : sourceCode,
+        source_lang: sourceCode === 'en' ? '*' : sourceCode,
         target_lang: targetCode
     };
 

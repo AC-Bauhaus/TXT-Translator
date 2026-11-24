@@ -1091,3 +1091,11 @@ select {
         font-size: 12px;
     }
 }
+
+.translation-percent {
+    display: none;
+    font-size: 10px;
+    color: var(--muted);
+    line-height: 1;
+    text-align: center
+}
