@@ -6,4 +6,5 @@ dist/
 *.argosmodel
 *.py[cod]
 .env
-
+models/nllb-600m/
+models/nllb-1.3b/
